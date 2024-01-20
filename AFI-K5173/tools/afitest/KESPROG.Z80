@@ -1,0 +1,84 @@
+; Copyright (c) 2023, Stefan Berndt
+;
+; All rights reserved.
+;
+; Redistribution and use in source and binary forms, with or without 
+; modification, are permitted provided that the following conditions are met:
+; 1. Redistributions of source code must retain the above copyright notice, 
+;    this list of conditions and the following disclaimer.
+; 2. Redistributions in binary form must reproduce the above copyright notice, 
+;    this list of conditions and the following disclaimer in the documentation 
+;    and/or other materials provided with the distribution.
+;
+; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
+; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
+; IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
+; ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE 
+; LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
+; CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
+; SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
+; INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
+; CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
+; ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF 
+; THE POSSIBILITY OF SUCH DAMAGE.
+
+        org     $3200
+
+PADDR   equ     14          ; Kes_IOPB^.cylinder
+PCMD    equ     16          ; Kes_IOPB^.head
+PVAL    equ     17          ; Kes_IOPB^.sector
+PRET    equ     4           ; Kes_IOPB^.done_bytes_l
+
+fn:     ld      l,(iy+PADDR); Parameter: Addresse
+        ld      h,(iy+PADDR+1); Parameter: Addresse
+        ld      a,(iy+PCMD) ; Parameter: Kommando
+
+        cp      1           ; Kommando: Memory read
+        jr      nz,l1
+        ld      a,(hl)    
+        ld      (iy+PRET),a ; Ergebnis: Wert
+        jr      le
+
+l1:     cp      2           ; Kommando: Memory write
+        jr      nz,l2
+        ld      a,(iy+PVAL) ; Parameter: Wert
+        ld      (hl),a
+        jr      le
+
+l2:     cp      3           ; Kommando: IO read
+        jr      nz,l3
+        ld      c,l
+        in      a,(c)
+        ld      (iy+PRET),a ; Ergebnis: Wert
+        jr      le
+
+l3:     cp      4           ; Kommando IO write
+        jr      nz,l4
+        ld      a,(iy+PVAL) ; Parameter: Wert
+        ld      c,l
+        out     (c),a
+        jr      le
+
+l4:     cp      5           ; Kommando: Block Read
+        jr      nz,l5
+        ld      a,(iy+PVAL) ; Parameter: PORT
+        ld      c,a
+        ld      b,0
+        inir
+        inir
+        jr      le
+
+l5:     cp      6           ; Kommando: Block Write
+        jr      nz,l6
+        ld      a,(iy+PVAL) ; Parameter: PORT
+        ld      c,a
+        ld      b,0
+        otir
+        otir
+        jr      le
+
+l6:     xor     a,255
+        ld      (iy+PRET),a ; Ergebnis: Wert
+
+le:     scf
+        ret

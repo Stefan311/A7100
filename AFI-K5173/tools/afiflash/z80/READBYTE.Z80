@@ -1,0 +1,16 @@
+        org     $2100
+
+PADDR   equ     14          ; Kes_IOPB^.cylinder
+PSEG    equ     16          ; Kes_IOPB^.head
+PRET    equ     4           ; Kes_IOPB^.done_bytes_l
+
+        ld      a,(iy+PSEG)  ;   Flash-Segment
+        out     ($b2),a     ;   an Flash-Segment-Port
+        ld      a,(iy+PADDR);   Flash-Addresse
+        ld      l,a
+        ld      a,(iy+PADDR+1);   Flash-Addresse
+        ld      h,a
+        ld      a,(hl)      ;   Flash lesen
+        ld      (iy+PRET),a ;   Datenbyte
+        scf
+        ret

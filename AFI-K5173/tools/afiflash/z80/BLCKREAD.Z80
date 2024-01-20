@@ -1,0 +1,17 @@
+        org     $2100
+
+PADDR   equ     14          ; Kes_IOPB^.cylinder
+PSEG    equ     16          ; Kes_IOPB^.head
+PVAL    equ     17          ; Kes_IOPB^.sector
+
+        ld      a,(iy+PSEG) ;   Flash-Segment
+        out     ($b2),a     ;   an Flash-Segment-Port
+        ld      a,(iy+PADDR);   Flash-Addresse
+        ld      l,a
+        ld      a,(iy+PADDR+1);   Flash-Addresse
+        ld      h,a
+        ld      de,$2200
+        ld      bc,$800
+        ldir
+        scf                 ;   Kein Interrupt im Host-System
+        ret

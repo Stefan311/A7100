@@ -1,0 +1,25 @@
+        org     $2100
+
+PSEG    equ     16          ; Kes_IOPB^.head
+PRET    equ     4           ; Kes_IOPB^.done_bytes_l
+
+        ld      a,(iy+PSEG) ;   Flash-Segment
+        out     ($b2),a     ;   an Flash-Segment-Port
+        ld      hl,$9000    ;   Flash-Addresse
+        ld      c,$11       ;   Loop High+1
+        ld      b,0         ;   Loop Low
+fl0:    ld      a,$ff       ;   Vergleichswert
+fl1:    cp      a,(hl)
+        jr      nz,fe1      ;   bei nicht-uebereinstimmung abbrechen
+        inc     hl
+        djnz    fl1         ;   Low Loop
+        ld      a,c
+        dec     a
+        ld      c,a
+        jr      nz,fl0      ;   High Loop
+fe1:    ld      a,l         ;   $A000 bei Erfolg, oder Fehler-Addresse
+        ld      (iy+PRET),a ;   Datenbyte
+        ld      a,h
+        ld      (iy+PRET+1),a;   Datenbyte
+        scf                 ;   Kein Interrupt im Host-System
+        ret
