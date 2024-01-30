@@ -120,6 +120,7 @@ const
   Ler_as = 46;
   Ler_amd1 = 84;
   Ler_amd2 = 22;
+  Lstop_afi = 7;
 { Z80 Konstanten Ende }
 
 var
@@ -517,6 +518,12 @@ begin
 inline(
 $3E/$00/$D3/$B2/$3E/$FF/$32/$00/$90/$06/$04/$10/$FE/$3E/$30/$32/
 $00/$90/$32/$00/$90/$C9);
+end;
+
+procedure Dstop_afi;
+begin
+inline(
+$3E/$FF/$32/$4F/$3B/$37/$C9);
 end;
 
 { Z80 Programme Ende }
@@ -1316,6 +1323,7 @@ begin
 
   if ok and not Lesen and (mfg<>UnknownMfg) and (memsize>#0) then
     begin
+      kes_load_run_const(addr(Dstop_afi), Lstop_afi);
       if ok then Loeschen;
       if ok then Leertest;
       if ok then Schreiben;

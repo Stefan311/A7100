@@ -1,0 +1,6 @@
+        org     $2100
+
+        ld      a,$ff
+        ld      ($3b4f),a
+        scf
+        ret

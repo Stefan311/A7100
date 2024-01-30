@@ -22,6 +22,7 @@ as80 -x er_sst2.z80
 as80 -x er_as.z80
 as80 -x er_amd1.z80
 as80 -x er_amd2.z80
+as80 -x stop_afi.z80
 tpc bin2pas
 bin2pas
 @del *.bin

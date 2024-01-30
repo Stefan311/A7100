@@ -103,6 +103,7 @@ begin
   bin2inc('er_as.bin', 'er_as');
   bin2inc('er_amd1.bin', 'er_amd1');
   bin2inc('er_amd2.bin', 'er_amd2');
+  bin2inc('stop_afi.bin', 'stop_afi');
   close(fo);
   close(fo2);
 
