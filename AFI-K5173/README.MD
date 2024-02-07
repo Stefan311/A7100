@@ -3,13 +3,13 @@ AFI ist einen Platine, mit dem IDE-Festplatten an das Datenträger-Subsystem des
 ### Welche Features unterstützt AFI-K5173?
 * 1 IDE Kanal für 2 Geräte
 * DMA-Fähig
-* nicht Boot-fähig (der A7100 hat keinen Boot-Code für Festplatten)
+* SCP bootbar von Festplatte oder Flashrom durch Stack-Manipulation und Code-Injection
 * Firmware Flashrom im System beschreibbar
 * Festplatte nutzbar in SCP1700
 
 ### Teile des Projekts:
 
-[Schaltung und PCB Layout in KiCad und PDF] Der Hardware-Aufbau ist identisch mit dem IDE-Kontroller vom A7150/CM1910.
+Der Hardware-Aufbau ist identisch mit dem IDE-Kontroller vom A7150/CM1910.
 
 [Firmware](firmware/)
 

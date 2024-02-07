@@ -1,0 +1,306 @@
+; Copyright (c) 2024, Stefan Berndt
+;
+; All rights reserved.
+;
+; Redistribution and use in source and binary forms, with or without 
+; modification, are permitted provided that the following conditions are met:
+; 1. Redistributions of source code must retain the above copyright notice, 
+;    this list of conditions and the following disclaimer.
+; 2. Redistributions in binary form must reproduce the above copyright notice, 
+;    this list of conditions and the following disclaimer in the documentation 
+;    and/or other materials provided with the distribution.
+;
+; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
+; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
+; IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
+; ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE 
+; LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
+; CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
+; SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
+; INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
+; CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
+; ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF 
+; THE POSSIBILITY OF SUCH DAMAGE.
+
+SCP_Begin   equ     1040h                   ; Lade-Offset fuer den SCP-Kernel
+SCP_Entry   equ     0104h:2500h             ; Start-Addresse fuer den SCP-Kernel
+
+; Offsets der KES-Mailbox-Variablen
+CCB_BUSY    equ     06f8h
+CIB_STATUS  equ     0701h
+CIB_SEMAP   equ     0703h
+IOPB_DEVCOD equ     0718h
+IOPB_DEVNR  equ     071ah
+IOPB_CMD    equ     071bh
+IOPB_MOD    equ     071ch
+IOPB_CYL    equ     071eh
+IOPB_HDSEC  equ     0720h
+IOPB_BOFS   equ     0722h
+IOPB_BSEG   equ     0724h
+IOPB_BTCNT  equ     0726h
+
+; Start
+            org     0F000h
+
+            mov     ds,0
+            mov     ss,0
+            mov     sp,0ffffh
+
+            call    TestDev                 ; Festplatte pruefen und Testmeldung ausgeben
+            jnc     boothdd                 ; Wenn bootbar, dann Festplatte anbooten
+
+            cmp     byte ptr 3040h, 255     ; 0104:2000, wird auf ff gesetzt, wenn eine bootbare Floppy eingelegt ist
+            jz      legacyboot              ; Wenn Floppy eingelegt, dann hat die Vorrang
+
+; SCP aus dem Flashrom booten
+            mov     si,offset TextBotRom
+            call    StringOut
+            mov     byte ptr SCP_Begin,0ffh
+            mov     byte ptr IOPB_MOD,3     ; Kein Interrupt, keine Widerholung
+            mov     byte ptr IOPB_CMD,4     ; Funktion "lesen"
+            mov     word ptr IOPB_DEVCOD,0
+            mov     byte ptr IOPB_DEVNR,03h ; Festplattenlaufwerk 4 - dadurch wird in der Kontroller-Firmware die "Spezialfunktion" ausgefuehrt
+            mov     word ptr IOPB_HDSEC,01ffh ; Kennung "SCP Kernel laden", zur Unterscheidung mehrerer "Spezialfunktion"
+            mov     word ptr IOPB_BSEG,0    ; Die Kontroller-Firmware weiss selber wohin der SCP-Kernel muss
+            mov     word ptr IOPB_BOFS,0
+            mov     word ptr IOPB_BTCNT,512 ; mit 0 fuehrt die KES das Kommando nicht aus!
+            call    WakeKesWait
+            jc      legacyboot
+
+            cmp     byte ptr SCP_Begin,0ffh ; Test, ob die Kontroller-Firmware was geschrieben hat
+            jz      legacyboot
+
+            cli
+            call    InitHW                  ; verschiedene Hardware-Initialisierungen durch das ACT
+            mov     cx,5                    ; Initial-Laufwerk fuer SCP=F:
+            jmp     SCP_Entry
+
+legacyboot: jmp     0f800h:3201h            ; ACT-Boot von Diskette, oder Start ACT-Debugger
+
+; SCP aus den Systemspuren der Festplatte booten
+boothdd:    cmp     byte ptr 3040h, 255     ; 0104:2000, wird auf ff gesetzt, wenn eine bootbare Floppy eingelegt ist
+            jz      legacyboot              ; Wenn Floppy eingelegt, dann hat die Vorrang
+
+            mov     si,offset TextBotSCP    ; SCP-Boot von Festplatte
+            call    StringOut
+
+            cld
+            mov     si,0e080h               ; wir haben vorhin den ersten Sektor der System-Spur geladen, wir brauchen den bis auf dem CMD-Fileheader
+            mov     di,SCP_Begin            ; also ab Byte 128 kopieren
+            mov     es,ds
+            mov     cx,192                  ; 512-128 / 2
+            rep     movsw
+
+            mov     word ptr IOPB_BOFS,11c0h    ; die restlichen Sektoren von der KES byte-genau in den Zielbereich laden lassen
+            mov     word ptr IOPB_BSEG,0
+            mov     word ptr IOPB_BTCNT,5000h   ; 20KB sollten locker ausreichen
+            inc     byte ptr IOPB_HDSEC+1       ; den ersten Sektor haben wir schon...
+            call    WakeKesWait
+            jc      legacyboot
+
+            cli
+            call    InitHW                  ; verschiedene Hardware-Initialisierungen durch das ACT
+            mov     cx,5                    ; Initial-Laufwerk fuer SCP=F:
+            jmp     SCP_Entry
+
+
+; Ausfuehrung diverser ACT-Funktionen zur Hardware-Initialisierung. Da das alles Near-Funktionen sind, erfolgt der Aufruf rueckwaerts üeber den Stack
+InitHW:     pop     ax
+            push    cs                      ; Near Return zu Far Return machen
+            push    ax
+            mov     ax,0c35h                ; Routine F800:362C Return --> 0C35 (RETF)
+            push    ax
+            mov     ax,362ch                ; Routine F800:3608 Return --> F800:362C
+            push    ax
+            mov     ax,3608h                ; Routine F800:1703 Return --> F800:3608
+            push    ax
+            mov     ax,1703h                ; Routine F800:35FC Return --> F800:1703
+            push    ax
+            jmp     0f800h:35fch
+
+; Festplatte testen
+TestDev:    mov     al,13
+            call    CharOut
+            mov     al,10
+            call    CharOut
+            mov     byte ptr CurrentTab,0
+            mov     si,offset DeviceHDD
+            call    SkipOut                 ; Bezeichnung ausgeben
+            call    InitTest                ; IDE-Disk mit default CHS-Parametern setzen
+            jc      TestDev_1               ; IDE-Platte ansprechbar?
+            mov     si,offset TextDot1      ; Punkt ausgeben
+            call    SkipOut
+            call    LoadTest                ; MBR und Systemspuren testen
+            jc      TestDev_2               ; bootbar?
+            mov     si,offset TextDot2      ; Noch ein Punkt ausgeben
+            call    SkipOut
+            mov     si,offset TextGo        ; GO ausgeben
+            call    SkipOut
+            clc
+            ret                             ; fertig
+
+; Fehler: IDE nicht ansprechbar
+TestDev_1:  mov     si,offset TextQM1       ; Fragezeichen ausgeben
+            call    SkipOut
+            mov     si,offset TextNotRdy    ; und "Not Ready"
+            call    SkipOut
+            stc
+            ret
+
+; Fehler: System nicht bootbar
+TestDev_2:  mov     si,offset TextQM2       ; Fragezeichen ausgeben
+            call    SkipOut
+            mov     si,offset TextNotBot    ; und "Not Bootable"
+            call    SkipOut
+            stc
+            ret
+
+; Cursor vorlauf, und Text ausgeben
+SkipOut:    lodsb
+            mov     bl,al
+SkipOut_1:  cmp     bl,byte ptr CurrentTab
+            jz      StringOut
+            mov     al,32
+            call    CharOut
+            jmp     SkipOut_1
+
+; Text ausgeben
+StringOut:  lodsb
+            cmp     al,0
+            jz      LocRet
+            call    CharOut
+            jmp     StringOut
+
+; Zeichen ausgeben
+CharOut:    mov     dx,200h
+            push    ax
+CharOut_1:  xor     al,al
+            out     dx,al
+            in      ax,dx
+            and     al,2
+            jnz     CharOut_1
+            mov     dx,202h
+            pop     ax
+            out     dx,al
+            inc     byte ptr CurrentTab
+LocRet:     ret
+
+; Texte
+DeviceHDD:  db      3,":HD:",0
+TextGo:     db      64,"GO",0
+TextNotRdy: db      61,"NOT READY",0
+TextNotBot: db      59,"NOT BOOTABLE",0
+TextQM1:    db      16,"?",0
+TextDot1:   db      16,".",0
+TextQM2:    db      18,"?",0
+TextDot2:   db      18,".",0
+
+TextBotRom: db      13,10,"A C T  COMPLETE...NOGO, BOOTING SCP.SYS FROM AFI ROM",0
+TextBotSCP: db      13,10,"A C T  COMPLETE...GO, BOOTING SCP FROM HARDDISK",0
+CurrentTab: db      0    ; aktuelle Cursor-Position (Spalte)
+
+; IDE CHS-Parameter setzen
+InitTest:   xor     ax,ax
+            mov     word ptr IOPB_DEVCOD,ax     ; Harddisk
+            mov     byte ptr IOPB_DEVNR,al      ; Device 0
+            mov     byte ptr IOPB_CMD,al        ; Funktion: Init
+            mov     byte ptr IOPB_MOD,3         ; Kein Interrupt, keine Wiederholung
+            mov     word ptr IOPB_BSEG,ax
+            mov     word ptr IOPB_BOFS,offset HD_PARAMS
+            jmp     WakeKesWait
+
+; Default-Parameter
+HD_PARAMS:  dw      600 ; Anzahl Zylinder
+            db      4   ; feste Koepfe
+            db      0   ; bewegliche Koepfe
+            db      17  ; Sektoren/Spur
+            dw      512 ; Bytes/Sektor
+            db      0   ; Anzahl Ersatzzylinder
+
+; MBR und System-Spuren testen
+LoadTest:   xor     ax,ax
+            mov     byte ptr IOPB_CMD,4         ; Sektor lesen
+            mov     word ptr IOPB_CYL,ax        ; CHS: 0,0,0
+            mov     word ptr IOPB_HDSEC,ax
+            mov     word ptr IOPB_BOFS,0e000h   ; Buffer fuer MBR
+            mov     word ptr IOPB_BTCNT,512
+            call    WakeKesWait
+            jc      LoadTest_e
+
+; MBR pruefen
+            cmp     word ptr 0e1feh,0aa55h
+            jnz     LoadTest_e
+            cmp     word ptr 0e19ch,512
+            jnz     LoadTest_e
+            cmp     word ptr 0e1b5h,512
+            jnz     LoadTest_e
+
+; Platten-Parameter aus dem MBR lesen
+            mov     ax,word ptr 0e1b0h          ; Zylinder
+            mov     word ptr HD_PARAMS,ax
+            mov     al,byte ptr 0e1b2h          ; Koepfe
+            mov     byte ptr HD_PARAMS+2,al
+            mov     al,byte ptr 0e1b4h          ; Sekten/Spur
+            mov     byte ptr HD_PARAMS+4,al
+
+; Platten-Parameter in die Platte initialisieren
+            call    InitTest
+            jc      LoadTest_e
+
+; Partitionstabelle pruefen
+            mov     bx,0e1beh                   ; Start Partitionstabelle
+            mov     cl,4
+LoadTest_1: cmp     byte ptr [bx],80h           ; Aktiv-Flagg
+            jz      LoadTest_2
+            add     bx,16                       ; naechster Eintrag
+            dec     cl
+            jnz     LoadTest_1
+
+LoadTest_e: stc                                 ; Ende mit Fehler
+            ret
+
+; Partitionstyp testen
+LoadTest_2: cmp     byte ptr [bx+4],40h         ; SCP-Partition ?
+            jnz     LoadTest_e
+
+; Start-CHS aus der Partitionstabelle lesen
+            mov     ax,[bx+1]                   ; Kopf+Sektor
+            and     ah,3fh                      ; 2bit Zylinder raus
+            mov     word ptr IOPB_HDSEC,ax      ; Bei Festplatten zaehlt die KES sektoren von 0, die Angabe hier ist ab 1.
+                                                ; Wir wollen aber ohnehin den SCP-Bootsektor ueberspringen, deshalb kein -1
+            xor     ax,ax
+            mov     al,[bx+2]                   ; 2bit Zylinder high
+            shl     ax,1
+            shl     ax,1
+            mov     al,[bx+3]                   ; Zylinder low
+            mov     word ptr IOPB_CYL,ax
+
+            mov     byte ptr IOPB_CMD,4         ; Sektor lesen
+            mov     word ptr IOPB_BOFS,0e000h   ; Buffer fuer MBR
+            mov     word ptr IOPB_BTCNT,512
+            call    WakeKesWait
+            jc      LoadTest_e
+
+            cmp     byte ptr 0e000h, 1          ; Kennung CMD-Header: einfaches Code-Segment
+            jnz     LoadTest_e
+
+            cmp     word ptr 0e003h,0104h       ; stimmt das Loader-Segment?
+            jnz     LoadTest_e
+
+            clc                                 ; alles gut!
+            ret
+
+; KES aufwecken, und warten bis die fertig ist
+WakeKesWait:mov     byte ptr CIB_SEMAP,0
+            mov     dx,100h
+            mov     al,1
+            out     dx,al
+WakeKes_1:  cmp     byte ptr CIB_SEMAP,0ffh
+            jnz     WakeKes_1
+            mov     al,byte ptr CIB_STATUS
+            and     al,81h
+            cmp     al,01h
+            clc
+            jz      WakeKes_2
+            stc
+WakeKes_2:  ret

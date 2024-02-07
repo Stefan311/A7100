@@ -1,4 +1,4 @@
-; Copyright (c) 2022-2023, Stefan Berndt
+; Copyright (c) 2022-2024, Stefan Berndt
 ;
 ; All rights reserved.
 ;
@@ -37,10 +37,10 @@
 ; 5. Der LBA-Modus wird nur verwendet, wenn die gewuenschte CHS-Translation
 ;    von der Festplatte nicht angenommen wird.
 ;
-; Version: 0.1
+; Version: 0.2
 ; Features:
 ; - Spezialversion fuer A7100
-; - nicht bootbar (der A7100 hat keinen Bootcode fuer Festpaltten im ACT/BIOS)
+; - SCP bootbar von Festplatte oder Flashrom durch Stack-Manipulation und Code-Injection
 ; - Schalterstellungen: werden ignoriert
 ; - IDE-Adressmodus: CHS oder LBA28
 ; - Datentransfer mit Z80-DMA direkt in den Hostspeicher (~380KB/s)
@@ -49,11 +49,15 @@
 ; Version Log:
 ; V0.1
 ; Basisversion abgeleitet von IDE_CHS V0.5 vom A7150
+; 
+; V0.2
+; SCP von Festplatte oder Flashrom booten
 
 ; ***************************************************************
 ; Schalter fuer Features:
 ForceCHS        equ     0               ; 1 = CHS erzwingen
 ForceLBA        equ     0               ; 1 = LBA erzwingen
+BootInjection   equ     1               ; 1 = Bootcode Injection aktivieren
 
 ; ***************************************************************
 ; Parameter von und zur KES
@@ -96,6 +100,7 @@ REG_DATA        equ     $B0             ; IO-Port IDE-Daten (Lesen und Schreiben
 REG_STEUER      equ     $B1             ; IO-Port Steuerregister (Schreiben)
 REG_SWITCH      equ     $B1             ; IO-Port Steuerregister (Lesen)
 REG_RESET       equ     $B2             ; IO-Port 16Bit-Toggler Reset (Lesen)
+REG_ROMSEL      equ     $B2             ; IO-Port ROM-Select (Schreiben)
 REG_HOSTSEL     equ     $1C             ; IO-Port Hostspeicher Bit 14-19
 REG_USB         equ     $B3             ; IO-Port USB-Platine
 
@@ -126,7 +131,7 @@ HDDService:     ld      a,(FUNKTIONSCODE)
                 jr      z,IDE_OKEnde
                 cp      a,15            ; Diagnostik?
                 jr      z,IDE_OKEnde
-                ld      bc,$0800        ; alle anderen Funktionen: Errorcode: Parameterfehler
+IDE_ParamError: ld      bc,$0800        ; alle anderen Funktionen: Errorcode: Parameterfehler
 
 
 ; ***************************************************************
@@ -163,7 +168,7 @@ HDD_Init:       ld      ix,(BUFFER)     ; Festplattenparameter sichern
                 ld      a,(ix+4)
                 ld      (MSECTORCT),a
 
-                ld      d,20
+                ld      d,2
                 ld      hl,0
 HDD_Init_1:     ld      b,$16
                 ld      a,(MIDE_DEVICE)
@@ -231,6 +236,10 @@ HDD_FakeID:     dw      0               ; Zylinder
 ; ***************************************************************
 ; HDD lesen oder schreiben vorbereiten
 IDE_Transfer:   ld      e,a
+                ld      a,(LAUFWERKNR)  ; Laufwerk 4 bekommt Spezialfunktionen
+                cp      a,3
+                jp      z,SpecialFunc
+
                 ld      hl,(CYLINDER)   ; Start-CHS muss im ERROR-Register zurueckgegeben werden
                 ld      (ERRORREG+3),hl
                 ld      hl,(HEAD)       ; das ist auch noch +SEKTOR
@@ -356,7 +365,7 @@ IDE_KES_DMA_2:  ld      a,(MSECCOUNT)
 IDE_KES_DMA_3:  bit     1,e
                 scf
                 ret     z
-                jp      IDE_Wait_Rdy	; bei Schreiben auf fertig-Meldung warten
+                jp      IDE_Wait_Rdy    ; bei Schreiben auf fertig-Meldung warten
 
 
 ; ***************************************************************
@@ -452,7 +461,7 @@ IDE_HOST_DMA_7: ld      a,(MSECCOUNT)
                 bit     1,a
                 scf
                 ret     z
-                jp      IDE_Wait_Rdy	; bei Schreiben auf fertig-Meldung warten
+                jp      IDE_Wait_Rdy    ; bei Schreiben auf fertig-Meldung warten
 
 
 ; ***************************************************************
@@ -739,6 +748,46 @@ dma_param_st:   db      $C3             ; 0 Reset
 dma_param_en:
 
 ; ***************************************************************
+; Sonderfunktionen
+SpecialFunc:    ld      a,(HEAD)
+                cp      a,$ff
+                jp      nz,IDE_ParamError
+                ld      a,(SECTOR)
+                cp      a,1
+                jr      z,SCP_Loader
+                jp      IDE_ParamError
+
+
+; ***************************************************************
+; Sonderfunktion SCP.SYS aus dem Flash in den Hostspeicher laden
+SCP_Loader:     ld      a,$80
+                out     (REG_HOSTSEL),a
+                ld      a,1
+                out     (REG_ROMSEL),a
+                ld      de,$d000
+
+SCP_Loader_1:   ld      hl,$9000
+                ld      bc,$1000
+                ldir
+
+                inc     a
+                out     (REG_ROMSEL),a
+                cp      a,4
+                jr      nz,SCP_Loader_2
+
+                ld      a,$81
+                out     (REG_HOSTSEL),a
+                ld      a,4
+                ld      de,$c000
+
+SCP_Loader_2:   cp      a,7
+                jr      nz,SCP_Loader_1
+                ld      a,$80
+                out     (REG_HOSTSEL),a
+                jp      IDE_OKEnde
+
+
+; ***************************************************************
 
                 org     $57fc
                 db      $10             ; Version 1.0
@@ -778,18 +827,51 @@ Cyclic_2:       xor     a
 
 ; ***************************************************************
 ; KES-Reset-Routine
-Reset:          ld      a,$38
+Reset:          ld      a,$38           ; LED's aus
                 out     (REG_STEUER),a
                 ld      (MIDE_STEUER),a
 
-                ld      hl,dma_param_st
+                ld      hl,dma_param_st ; DMA-Parameter vorbereiten
                 ld      de,MDMA_PARAM
                 ld      bc,dma_param_en-dma_param_st
                 ldir
 
                 xor     a,a
                 ld      (MIDE_DEVICE),a
+
+    if BootInjection=1
+                out     (REG_HOSTSEL),a
+                ld      hl,($C9Ce)      ; Return-Adresse vom ACT KES-Test auf dem Stack des Main-Systems
+                ld      de,$3201        ; Original-Adresse?
+                sbc     hl,de
+                ret     nz              ; Wenn die Ruecksprung-Adresse nicht stimmt, dann sollten wir lieber nichts tun
+
+                ld      a,$83           ; Inject-Code in den Speicher des Main-Systems kopieren
+                out     (REG_HOSTSEL),a
+                ld      hl,INJECT86_ST
+                ld      de,$f000        ; nach 0000:F000
+                ld      bc,INJECT86_EN-INJECT86_ST
+                ldir
+
+                ld      a,$80
+                out     (REG_HOSTSEL),a
+
+                ld      hl,$0c35        ; Return-Adresse auf (F800):0C35 stellen
+                ld      ($c9ce),hl      ; an der Stelle steht ein RETF im ACT-Rom.
+                ld      hl,$f000        ; Danach die Return-Adresse fuer das RETF auf den Stack
+                ld      ($c9d0),hl      ; schreiben: die 0000:F000 von unserem Inject-Code.
+                ld      hl,$0000        ; Nach dem Ende des ACT KES-Tests springt das Main-System zuerst auf das RETF
+                ld      ($C9d2),hl      ; und dann auf den Inject-Code.
+    endif
+
                 ret
+
+    if BootInjection=1
+; ***************************************************************
+; Inject-Code fuer das Hauptsystem
+    include "inject.z80"
+
+    endif
 
 ; ***************************************************************
                 org     $5ffc
