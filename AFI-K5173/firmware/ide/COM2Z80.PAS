@@ -57,7 +57,7 @@ begin
 
   writeln(fo,'INJECT86_ST:');
 
-  for c:=0 to $EEFF do read(fi,b);
+  for c:=0 to $7EFF do read(fi,b);
 
   c:=0;
 

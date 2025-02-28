@@ -846,10 +846,10 @@ Reset:          ld      a,$38           ; LED's aus
                 sbc     hl,de
                 ret     nz              ; Wenn die Ruecksprung-Adresse nicht stimmt, dann sollten wir lieber nichts tun
 
-                ld      a,$83           ; Inject-Code in den Speicher des Main-Systems kopieren
+                ld      a,$82           ; Inject-Code in den Speicher des Main-Systems kopieren
                 out     (REG_HOSTSEL),a
                 ld      hl,INJECT86_ST
-                ld      de,$f000        ; nach 0000:F000
+                ld      de,$c000        ; nach 0000:8000
                 ld      bc,INJECT86_EN-INJECT86_ST
                 ldir
 
@@ -858,8 +858,8 @@ Reset:          ld      a,$38           ; LED's aus
 
                 ld      hl,$0c35        ; Return-Adresse auf (F800):0C35 stellen
                 ld      ($c9ce),hl      ; an der Stelle steht ein RETF im ACT-Rom.
-                ld      hl,$f000        ; Danach die Return-Adresse fuer das RETF auf den Stack
-                ld      ($c9d0),hl      ; schreiben: die 0000:F000 von unserem Inject-Code.
+                ld      hl,$8000        ; Danach die Return-Adresse fuer das RETF auf den Stack
+                ld      ($c9d0),hl      ; schreiben: die 0000:8000 von unserem Inject-Code.
                 ld      hl,$0000        ; Nach dem Ende des ACT KES-Tests springt das Main-System zuerst auf das RETF
                 ld      ($C9d2),hl      ; und dann auf den Inject-Code.
     endif

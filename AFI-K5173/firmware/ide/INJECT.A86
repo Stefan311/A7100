@@ -1,25 +1,25 @@
-; Copyright (c) 2024, Stefan Berndt
+; Copyright (c) 2024-25, Stefan Berndt
 ;
 ; All rights reserved.
 ;
-; Redistribution and use in source and binary forms, with or without 
+; Redistribution and use in source and binary forms, with or without
 ; modification, are permitted provided that the following conditions are met:
-; 1. Redistributions of source code must retain the above copyright notice, 
+; 1. Redistributions of source code must retain the above copyright notice,
 ;    this list of conditions and the following disclaimer.
-; 2. Redistributions in binary form must reproduce the above copyright notice, 
-;    this list of conditions and the following disclaimer in the documentation 
+; 2. Redistributions in binary form must reproduce the above copyright notice,
+;    this list of conditions and the following disclaimer in the documentation
 ;    and/or other materials provided with the distribution.
 ;
-; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
-; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
-; IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
-; ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE 
-; LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
-; CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
-; SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
-; INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
-; CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
-; ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF 
+; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+; IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+; ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+; LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+; CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+; SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+; INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+; CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+; ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
 ; THE POSSIBILITY OF SUCH DAMAGE.
 
 SCP_Begin   equ     1040h                   ; Lade-Offset fuer den SCP-Kernel
@@ -40,20 +40,25 @@ IOPB_BSEG   equ     0724h
 IOPB_BTCNT  equ     0726h
 
 ; Start
-            org     0F000h
+            org     08000h
 
             mov     ds,0
             mov     ss,0
             mov     sp,0ffffh
 
             call    TestDev                 ; Festplatte pruefen und Testmeldung ausgeben
-            jnc     boothdd                 ; Wenn bootbar, dann Festplatte anbooten
 
             cmp     byte ptr 3040h, 255     ; 0104:2000, wird auf ff gesetzt, wenn eine bootbare Floppy eingelegt ist
             jz      legacyboot              ; Wenn Floppy eingelegt, dann hat die Vorrang
 
+            cmp     ch,1
+            jz      scpboot
+            cmp     ch,2
+            jnz     romboot
+            jmp     mutosboot
+
 ; SCP aus dem Flashrom booten
-            mov     si,offset TextBotRom
+romboot:    mov     si,offset TextBotRom
             call    StringOut
             mov     byte ptr SCP_Begin,0ffh
             mov     byte ptr IOPB_MOD,3     ; Kein Interrupt, keine Widerholung
@@ -78,10 +83,7 @@ IOPB_BTCNT  equ     0726h
 legacyboot: jmp     0f800h:3201h            ; ACT-Boot von Diskette, oder Start ACT-Debugger
 
 ; SCP aus den Systemspuren der Festplatte booten
-boothdd:    cmp     byte ptr 3040h, 255     ; 0104:2000, wird auf ff gesetzt, wenn eine bootbare Floppy eingelegt ist
-            jz      legacyboot              ; Wenn Floppy eingelegt, dann hat die Vorrang
-
-            mov     si,offset TextBotSCP    ; SCP-Boot von Festplatte
+scpboot:    mov     si,offset TextBotSCP    ; SCP-Boot von Festplatte
             call    StringOut
 
             cld
@@ -103,6 +105,84 @@ boothdd:    cmp     byte ptr 3040h, 255     ; 0104:2000, wird auf ff gesetzt, we
             mov     cx,5                    ; Initial-Laufwerk fuer SCP=F:
             jmp     SCP_Entry
 
+; MUTOS Bootloader
+mutosboot:  mov     si,offset TextBotMUT    ; MUTOS-Boot von Festplatte
+            call    StringOut
+            cli
+            call    InitHW                  ; verschiedene Hardware-Initialisierungen durch das ACT
+
+            cld
+            mov     dx,word ptr 06e2h       ; Speichergroesse in segmenten
+            sub     dx, 0180h
+            mov     word ptr 04d0h, 0
+            mov     word ptr 04d2h, dx
+            mov     es,dx                   ; den ersten Sektor des Bootloaders nahe ans Ende des Speichers kopieren
+            mov     cx,256
+            mov     si,0e000h
+            mov     di,0
+            rep     movsw
+
+            xor     ax,ax                   ; einge der Parameter auf dem Stack werden ausgewertet. vlt Bootparameter?
+            push    ax
+            push    ax
+            push    ax
+            push    ax
+            push    ax
+            push    ax
+
+            push    ax                      ; segment +
+            mov     ax, offset mutosblock
+            push    ax                      ; offset vom ACT-Sektorlader fuer MUTOS
+
+            mov     ax, word ptr IOPB_CYL   ; Zylinder des ersten Sektors
+            mov     bl,byte ptr HD_PARAMS+2 ; * Koepfe
+            xor     bh,bh
+            mul     bx
+            mov     bl, byte ptr IOPB_HDSEC ; + Kopf des ersten Sektors
+            add     ax,bx
+            mov     bl, byte ptr HD_PARAMS+4    ; * Sektoren pro Spur
+            mul     bx
+            mov     bl, byte ptr IOPB_HDSEC+1   ; + Sektor
+            add     ax,bx
+            adc     dx,0
+
+            push    ax
+            mov     cx, word ptr IOPB_BTCNT ; Anzahl bereits geladener Bytes
+            push    cx
+
+            call    dword ptr 04d0h
+            jmp     legacyboot
+
+; Sektor-Loader fuer MUTOS, wird vom MUTOS-Bootloader benutzt
+mutosblock: push    bp
+            mov     bp,sp
+            push    ds
+            xor     ax,ax
+            mov     ds,ax
+            mov     ax,[bp+6]
+            mov     word ptr IOPB_BOFS,ax
+            mov     ax,[bp+8]
+            mov     word ptr IOPB_BSEG,ax
+            mov     ax,[bp+10]
+            mov     dx,[bp+12]
+            mov     bl,byte ptr HD_PARAMS+4 ; sektoren pro spur
+            xor     bh,bh
+            div     bx
+            mov     byte ptr IOPB_HDSEC+1, dl   ; rest=sektor
+            mov     bl,byte ptr HD_PARAMS+2 ; koepfe
+            xor     dx,dx
+            div     bx
+            mov     byte ptr IOPB_HDSEC, dl ; rest=kopf
+            mov     word ptr IOPB_CYL, ax
+            mov     word ptr IOPB_BTCNT,200h
+            mov     byte ptr IOPB_MOD,3
+            mov     byte ptr IOPB_CMD,4
+            mov     word ptr IOPB_DEVCOD,0
+            mov     byte ptr IOPB_DEVNR,0
+            call    WakeKesWait
+            pop     ds
+            pop     bp
+            retf    0ah
 
 ; Ausfuehrung diverser ACT-Funktionen zur Hardware-Initialisierung. Da das alles Near-Funktionen sind, erfolgt der Aufruf rueckwaerts üeber den Stack
 InitHW:     pop     ax
@@ -197,6 +277,7 @@ TextDot2:   db      18,".",0
 
 TextBotRom: db      13,10,"A C T  COMPLETE...NOGO, BOOTING SCP.SYS FROM AFI ROM",0
 TextBotSCP: db      13,10,"A C T  COMPLETE...GO, BOOTING SCP FROM HARDDISK",0
+TextBotMUT: db      13,10,"A C T  COMPLETE...GO, BOOTING MUTOS FROM HARDDISK",0
 CurrentTab: db      0    ; aktuelle Cursor-Position (Spalte)
 
 ; IDE CHS-Parameter setzen
@@ -256,17 +337,25 @@ LoadTest_1: cmp     byte ptr [bx],80h           ; Aktiv-Flagg
             dec     cl
             jnz     LoadTest_1
 
-LoadTest_e: stc                                 ; Ende mit Fehler
+LoadTest_e: stc
+            mov     ch,0                        ; Ende mit Fehler
             ret
 
 ; Partitionstyp testen
-LoadTest_2: cmp     byte ptr [bx+4],40h         ; SCP-Partition ?
-            jnz     LoadTest_e
+LoadTest_2: mov     ch,byte ptr [bx+4]
+            cmp     ch,40h                      ; SCP-Partition ?
+            jz      LoadTest_3
+            cmp     ch,20h                      ; MUTOS-Partition ?
+            jz      LoadTest_3
+            jmp     LoadTest_e
 
 ; Start-CHS aus der Partitionstabelle lesen
-            mov     ax,[bx+1]                   ; Kopf+Sektor
+LoadTest_3: mov     ax,[bx+1]                   ; Kopf+Sektor
             and     ah,3fh                      ; 2bit Zylinder raus
-            mov     word ptr IOPB_HDSEC,ax      ; Bei Festplatten zaehlt die KES sektoren von 0, die Angabe hier ist ab 1.
+            cmp     ch,20h
+            jnz     LoadTest_4
+            dec     ah
+LoadTest_4: mov     word ptr IOPB_HDSEC,ax      ; Bei Festplatten zaehlt die KES sektoren von 0, die Angabe hier ist ab 1.
                                                 ; Wir wollen aber ohnehin den SCP-Bootsektor ueberspringen, deshalb kein -1
             xor     ax,ax
             mov     al,[bx+2]                   ; 2bit Zylinder high
@@ -281,13 +370,30 @@ LoadTest_2: cmp     byte ptr [bx+4],40h         ; SCP-Partition ?
             call    WakeKesWait
             jc      LoadTest_e
 
-            cmp     byte ptr 0e000h, 1          ; Kennung CMD-Header: einfaches Code-Segment
+            cmp     ch,40h                      ; SCP
+            jz      LoadTest_S
+            cmp     ch,20h                      ; MUTOS
+            jz      LoadTest_M
+            jmp     LoadTest_e
+
+LoadTest_S: cmp     byte ptr 0e000h, 1          ; Kennung CMD-Header: einfaches Code-Segment
             jnz     LoadTest_e
 
             cmp     word ptr 0e003h,0104h       ; stimmt das Loader-Segment?
             jnz     LoadTest_e
 
             clc                                 ; alles gut!
+            mov     ch,1
+            ret
+
+LoadTest_M: cmp     word ptr 0e000h,0c98ch      ; MUTOS Bootcode
+            jnz     LoadTest_e
+
+            cmp     word ptr 0e002h,0d98eh      ; MUTOS Bootcode
+            jnz     LoadTest_e
+
+            clc                                 ; alles gut!
+            mov     ch,2
             ret
 
 ; KES aufwecken, und warten bis die fertig ist
